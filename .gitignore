@@ -46,6 +46,15 @@ Makefile*
 *xcshareddata*
 *.swp
 
+Visual Studio Generated files
+*.sln
+*.vcxproj*
+*.opt
+**/release/*
+**/debug/*
+.vs/
+icon.aps
+
 # Qt unit tests
 target_wrapper.*
 

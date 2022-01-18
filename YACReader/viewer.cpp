@@ -210,6 +210,12 @@ void Viewer::prepareForOpening()
 
     verticalScrollBar()->setSliderPosition(verticalScrollBar()->minimum());
 
+    // TODO: side selection should be optional
+    if(Configuration::getConfiguration().getDoubleMangaPage())
+        horizontalScrollBar()->setSliderPosition(horizontalScrollBar()->maximum());
+    else
+        horizontalScrollBar()->setSliderPosition(horizontalScrollBar()->minimum());
+
     if (Configuration::getConfiguration().getShowInformation() && !information) {
         QTimer::singleShot(0, this, &Viewer::informationSwitch);
     }
@@ -246,9 +252,8 @@ void Viewer::processCRCError(QString message)
     QMessageBox::critical(this, tr("CRC Error"), message);
 }
 
-void Viewer::next()
+void Viewer::nextPage()
 {
-    direction = 1;
     if (doublePage && render->currentPageIsDoublePage()) {
         render->nextDoublePage();
     } else {
@@ -258,27 +263,34 @@ void Viewer::next()
     shouldOpenPrevious = false;
 }
 
-void Viewer::left()
+void Viewer::next(bool scroll)
 {
+    direction = scroll ? 1 : 0;
+    nextPage();
+}
+
+void Viewer::left(bool scroll)
+{
+    direction = scroll ? -2 : 0;
     if (doubleMangaPage) {
-        next();
+        nextPage();
     } else {
-        prev();
+        prevPage();
     }
 }
 
-void Viewer::right()
+void Viewer::right(bool scroll)
 {
+    direction = scroll ? 2 : 0;
     if (doubleMangaPage) {
-        prev();
+        prevPage();
     } else {
-        next();
+        nextPage();
     }
 }
 
-void Viewer::prev()
+void Viewer::prevPage()
 {
-    direction = -1;
     if (doublePage && render->previousPageIsDoublePage()) {
         render->previousDoublePage();
     } else {
@@ -286,6 +298,12 @@ void Viewer::prev()
     }
     updateInformation();
     shouldOpenNext = false;
+}
+
+void Viewer::prev(bool scroll)
+{
+    direction = scroll ? -1 : 0;
+    prevPage();
 }
 void Viewer::showGoToDialog()
 {
@@ -322,7 +340,7 @@ void Viewer::updatePage()
     }
     content->setPixmap(*currentPage);
     updateContentSize();
-    updateVerticalScrollBar();
+    updateScrollBar();
 
     if (goToFlow->isHidden())
         setFocus(Qt::ShortcutFocusReason);
@@ -348,6 +366,7 @@ void Viewer::updateContentSize()
     // there is an image to resize
     if (currentPage != nullptr && !currentPage->isNull()) {
         QSize pagefit = currentPage->size();
+        QLOG_INFO() << "updateContentSize" << pagefit.width() << " " << pagefit.height() << " " << width() << " " << height();
         bool stretchImages = Configuration::getConfiguration().getEnlargeImages();
         YACReader::FitMode fitmode = Configuration::getConfiguration().getFitMode();
         switch (fitmode) {
@@ -391,25 +410,50 @@ void Viewer::updateContentSize()
     content->update(); // TODO, it shouldn't be neccesary
 }
 
-void Viewer::increaseZoomFactor()
+void Viewer::increaseZoomFactor(std::optional<QPoint> anchor)
 {
-    zoom = std::min(zoom + 10, 500);
+    if (zoom >= 100)
+        zoom = std::min(int(zoom * 1.1), 500);
+    else
+        zoom = std::min(zoom + 10, 100);
 
-    updateContentSize();
-    notificationsLabel->setText(QString::number(getZoomFactor()) + "%");
-    notificationsLabel->flash();
-
-    emit zoomUpdated(zoom);
+    applyZoomFactor(anchor);
 }
-void Viewer::decreaseZoomFactor()
+void Viewer::decreaseZoomFactor(std::optional<QPoint> anchor)
 {
-    zoom = std::max(zoom - 10, 30);
+    if (zoom > 100) {
+        zoom = std::max(int(zoom / 1.1), 100);
+        if (zoom < 108)
+            zoom = 100;
+    }
+    else
+        zoom = std::max(zoom - 10, 30);
+
+    applyZoomFactor(anchor);
+}
+
+void Viewer::applyZoomFactor(std::optional<QPoint> anchor)
+{
+    static const auto positionDependentScale = [](int mousePos, int oldScrollPos, int oldSize, int newSize) {
+        return int(((float)newSize / oldSize) * (oldScrollPos + mousePos) - mousePos);
+    };
+
+    QPoint anchorPoint = anchor.value_or(QPoint(width()/2, height()/2));
+    auto mousePosX = anchorPoint.x(), mousePosY = anchorPoint.y();
+    auto oldSizeX = content->size().width(), oldSizeY = content->size().height();
+    auto oldScrollPosX = horizontalScrollBar()->sliderPosition(), oldScrollPosY = verticalScrollBar()->sliderPosition();
 
     updateContentSize();
+    auto newSizeX = content->size().width(), newSizeY = content->size().height();
+    horizontalScrollBar()->setSliderPosition(positionDependentScale(mousePosX, oldScrollPosX, oldSizeX, newSizeX));
+    verticalScrollBar()->setSliderPosition(positionDependentScale(mousePosY, oldScrollPosY, oldSizeY, newSizeY));
+
     notificationsLabel->setText(QString::number(getZoomFactor()) + "%");
     notificationsLabel->flash();
 
     emit zoomUpdated(zoom);
+
+
 }
 
 int Viewer::getZoomFactor()
@@ -431,12 +475,22 @@ void Viewer::setZoomFactor(int z)
     emit zoomUpdated(zoom);
 }
 
-void Viewer::updateVerticalScrollBar()
+void Viewer::updateScrollBar()
 {
-    if (direction > 0)
+    switch (direction) {
+    case 1:
         verticalScrollBar()->setSliderPosition(verticalScrollBar()->minimum());
-    else
+        break;
+    case -1:
         verticalScrollBar()->setSliderPosition(verticalScrollBar()->maximum());
+        break;
+    case 2:
+        horizontalScrollBar()->setSliderPosition(horizontalScrollBar()->minimum());
+        break;
+    case -2:
+        horizontalScrollBar()->setSliderPosition(horizontalScrollBar()->maximum());
+        break;
+    }
 }
 
 void Viewer::scrollDown()
@@ -642,41 +696,56 @@ void Viewer::wheelEvent(QWheelEvent *event)
     auto delta = event->angleDelta();
 
     if (render->hasLoadedComic()) {
-        if (delta.x() != 0) {
-            animateScroll(*horizontalScroller, *horizontalScrollBar(), delta.x());
+        if (event->modifiers() == Qt::ControlModifier) {
+            if (delta.y() < 0)
+                decreaseZoomFactor(event->position().toPoint());
+            else
+                increaseZoomFactor(event->position().toPoint());
             return;
         }
+
+        auto manga = Configuration::getConfiguration().getDoubleMangaPage();
+        if (delta.x() != 0) {
+            animateScroll(*horizontalScroller, *horizontalScrollBar(), manga ? -delta.x() : delta.x());
+            return;
+        }
+
+        auto fitToHeightMode = Configuration::getConfiguration().getFitMode() == YACReader::FitMode::ToHeight;
+        auto scrollBar = fitToHeightMode ? horizontalScrollBar() : verticalScrollBar();
+        auto scroller = fitToHeightMode ? horizontalScroller : verticalScroller;
+
+        auto [deltaMovement, forward, backward] = fitToHeightMode && manga ?
+            std::tuple { -delta.y(), Backward, Forward } :
+            std::tuple { delta.y(), Forward, Backward };
+
+        auto [direction, scrollLimit] = deltaMovement < 0 ?
+            std::tuple { forward, scrollBar->maximum() } :
+            std::tuple { backward, scrollBar->minimum() };
+
+        auto forceTurn = event->modifiers() == Qt::ShiftModifier;
 
         auto turnPageOnScroll = !Configuration::getConfiguration().getDoNotTurnPageOnScroll();
         auto getUseSingleScrollStepToTurnPage = Configuration::getConfiguration().getUseSingleScrollStepToTurnPage();
 
-        if ((delta.y() < 0) && (verticalScrollBar()->sliderPosition() == verticalScrollBar()->maximum()) && turnPageOnScroll) {
-            if (wheelStop || getUseSingleScrollStepToTurnPage || verticalScrollBar()->maximum() == verticalScrollBar()->minimum()) {
-                if (getMovement(event) == Forward) {
-                    next();
-                    verticalScroller->stop();
+        if ((forceTurn || scrollBar->sliderPosition() == scrollLimit) && turnPageOnScroll) {
+            static const decltype(&Viewer::next) mover[2][2] = {
+                { &Viewer::prev, &Viewer::left },
+                { &Viewer::next, &Viewer::right }
+            };
+
+            if (wheelStop || getUseSingleScrollStepToTurnPage || scrollBar->maximum() == scrollBar->minimum()) {
+                if (getMovement(event) == direction) {
+                    (this->*mover[deltaMovement < 0][fitToHeightMode])(!forceTurn);
+                    scroller->stop();
                     event->accept();
                     wheelStop = false;
                 }
                 return;
             } else
                 wheelStop = true;
-        } else {
-            if ((delta.y() > 0) && (verticalScrollBar()->sliderPosition() == verticalScrollBar()->minimum()) && turnPageOnScroll) {
-                if (wheelStop || getUseSingleScrollStepToTurnPage || verticalScrollBar()->maximum() == verticalScrollBar()->minimum()) {
-                    if (getMovement(event) == Backward) {
-                        prev();
-                        verticalScroller->stop();
-                        event->accept();
-                        wheelStop = false;
-                    }
-                    return;
-                } else
-                    wheelStop = true;
-            }
         }
 
-        animateScroll(*verticalScroller, *verticalScrollBar(), delta.y());
+        animateScroll(*scroller, *scrollBar, deltaMovement);
     }
 }
 

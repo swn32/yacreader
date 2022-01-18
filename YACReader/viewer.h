@@ -15,6 +15,7 @@
 #include <QPropertyAnimation>
 #include <QParallelAnimationGroup>
 #include <QSettings>
+#include <optional>
 
 #include "scroll_management.h"
 
@@ -37,25 +38,28 @@ class Viewer : public QScrollArea, public ScrollManagement
 public:
     bool fullscreen; // TODO, change by the right use of windowState();
 public slots:
-    void increaseZoomFactor();
-    void decreaseZoomFactor();
+    void increaseZoomFactor(std::optional<QPoint> anchor = {});
+    void decreaseZoomFactor(std::optional<QPoint> anchor = {});
+    void applyZoomFactor(std::optional<QPoint> anchor);
     void setZoomFactor(int);
     int getZoomFactor();
 
     void prepareForOpening();
     void open(QString pathFile, int atPage = -1);
     void open(QString pathFile, const ComicDB &comic);
-    void prev();
-    void next();
-    void left();
-    void right();
+    void prevPage();
+    void nextPage();
+    void prev(bool scroll = true);
+    void next(bool scroll = true);
+    void left(bool scroll = true);
+    void right(bool scroll = true);
     void showGoToDialog();
     void goToFirstPage();
     void goToLastPage();
     void goTo(unsigned int page);
     void updatePage();
     void updateContentSize();
-    void updateVerticalScrollBar();
+    void updateScrollBar();
     void updateOptions();
     void scrollDown();
     void scrollUp();

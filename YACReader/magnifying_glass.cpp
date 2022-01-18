@@ -158,7 +158,7 @@ void MagnifyingGlass::wheelEvent(QWheelEvent *event)
         break;
     // size width
     case Qt::AltModifier:
-        if (event->angleDelta().y() < 0)
+        if (event->angleDelta().x() < 0)
             widthUp();
         else
             widthDown();
